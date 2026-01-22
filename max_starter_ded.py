@@ -24,66 +24,55 @@ def generate_forest(forest_size, initial_infections=None):
         return forest
 
 
-def step_simulation(forest, infection_prob):
+def step_simulation(forest, A, p0, m):
     """
-    advance the simulation by one time step.
-    find each diseased tree and attempt to infect it's neighbors.
-    return the updated forest.
-    input:
-        forest: the current state of the forest.
-        infection_prob: probability of an infection.
-    returns: the updated forest.
+    advance the simulation by one time step using beetle-driven infection.
+    beetles move to 8 neighbors, then infect healthy trees.
+    inputs:
+        forest: 0 = healthy, 1 = infected
+        A: adult beetle count per cell
+        p0: per-beetle infection probability
+        m: fraction of beetles that move each step
+    returns:
+        updated forest, updated beetle grid A
     """
     forest_size = forest.shape[0]
-    # we need to track new infections separately to avoid
-    # causing a newly infected tree to infect others in the same step
-    infected_trees = np.zeros_like(forest)
 
-    # search for diseased trees
+    # Beetle movement
+    A_next = (1 - m) * A
+
+    directions = [(-1, 0), (1, 0), (0, -1), (0, 1),
+                  (-1, -1), (-1, 1), (1, -1), (1, 1)]
+
     for i in range(forest_size):
         for j in range(forest_size):
-            if forest[i, j] == 1:
-                # attempt to infect neighbors
-                new_infections = infect_neighbors(forest, i, j, infection_prob)
-                # track new infections this time step
-                infected_trees += new_infections
-    # Update the forest with new new_infections at the end of the step
+            if A[i, j] > 0:
+                share = m * A[i, j] / 8
+                for di, dj in directions:
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < forest_size and 0 <= nj < forest_size:
+                        A_next[ni, nj] += share
+
+    A = A_next
+
+    #Infection from beetles
+    infected_trees = np.zeros_like(forest)
+
+    for i in range(forest_size):
+        for j in range(forest_size):
+            if forest[i, j] == 0 and A[i, j] > 0:
+                # stacking probability
+                P = 1 - (1 - p0) ** A[i, j]
+                if random.random() < P:
+                    infected_trees[i, j] = 1
+
     forest += infected_trees
-    # now any non-zero value indicates a diseased infected_trees
-    # >1 means the tree has been infected by multiple neighbors this step
-    # clipping the values to 0 or 1 keeps the algoritm consistent
     forest = np.clip(forest, 0, 1)
-    return forest
+
+    return forest, A
 
 
-def infect_neighbors(forest, i, j, infection_prob):
-    """
-    attempt to infect the neighbors of the tree at position (i, j)
-    input:
-        forest: the current state of the forest.
-        i, j: the position of the diseased tree.
-        infection_prob: probability of an infection.
-    returns: a map of new infections in this time step.
-    """
-    forest_size = forest.shape[0]
-    new_infections = np.zeros_like(forest)
-    # define the possible neighbor directions vertical, horizontal, diagonal
-    directions = [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
-
-    for dir_i, dir_j in directions:
-        # add direction to current position
-        neighbor_i, neighbor_j = i + dir_i, j + dir_j
-        # check if neighbor is within bounds
-        if 0 <= neighbor_i < forest_size and 0 <= neighbor_j < forest_size:
-            # attempt to infect the neighbor
-            if forest[neighbor_i, neighbor_j] == 0:  # healthy tree
-                if random.random() <= infection_prob:
-                    # mark the neighbor as newly infected
-                    new_infections[neighbor_i, neighbor_j] = 1
-    return new_infections
-
-
-def run_simulation(forest, infection_prob, max_steps):
+def run_simulation(forest, A, max_steps, p0, m):
     """
     run the forest infection simulation for a given number of steps.
     input:
@@ -96,7 +85,7 @@ def run_simulation(forest, infection_prob, max_steps):
     forest_states = [forest.copy()]
 
     for step in range(max_steps):
-        forest = step_simulation(forest, infection_prob)
+        forest, A = step_simulation(forest, A, p0, m)
         forest_states.append(forest.copy())
 
     return forest_states
@@ -129,40 +118,48 @@ def create_movie(forest_states, filename="forest_infection", fps=10):
 
 def validate_probability(init_forest, infection_prob, trails=1000):
     """
-    run multiple single step simulations to validate that the simulation
-    is running correctly.
-    input:
-        init_forest: initial forest state with a single diseased tree.
-        infection_prob: probability of an infection.
-        trails: number of simulation trails to run.
+    run multiple single-step simulations to validate the beetle-driven
+    infection process.
+
+    inputs:
+        init_forest: initial forest state with a single infected tree.
+        A0: initial adult beetle distribution.
+        p0: per-beetle infection probability.
+        m: fraction of beetles that move each step.
+        trials: number of simulation trials to run.
+
     returns:
-        Avg Matrix after all trails.
+        Average infection matrix after all trials.
     """
-    infection_count = np.zeros_like(init_forest, dtype=float)
+    A0 = np.zeros_like(init_forest, dtype=float)
+    center = init_forest.shape[0] // 2
+    A0[center, center] = 100
 
-    for _ in range(trails):
-        new_forest = step_simulation(init_forest.copy(), infection_prob)
-        infection_count += new_forest
+    new_forest, _ = step_simulation(init_forest.copy(), A0.copy(), p0, m)
 
-    avg_infection = infection_count / trails
-    return avg_infection
 
 
 if __name__ == "__main__":
-    forest_size = 1000
-    infection_prob = 0.4
-    max_steps = 500
-    num_trials = 1000
+    forest_size = 100
+    max_steps = 50
+    num_trials = 100
+    p0 = 0.02 # per-beetle infection probability
+    m  = 0.2 # 20% of beetles move per week
 
     # the instructions say to start with an infection at 3,3
     # however im assuming the instructions are indexed from 1
     # because placing it at 3,3 in a 5x5 forest places it at the edge.
     # so ill place it at (2,2) which makes the numbers more clear
     # its easy to change if needed by changing the coordinates in the list.
-    initial_infections = [(2, 2)]
-    forest = generate_forest(forest_size, initial_infections)
+    forest = generate_forest(forest_size)
+    A = np.zeros_like(forest, dtype=float)
+    center = forest_size // 2
+    # initial adult bettles
+    A[center, center] = 100 
     print("Initial forest state:")
     print(forest)
+    print("Initial beetle distribution:")
+    print(A)
 
     # # Validate the infection probability
     # time_start_val = time.time()
@@ -188,7 +185,7 @@ if __name__ == "__main__":
     # Run the full simulations
     time_start_sim = time.time()
     print("Running full simulation...")
-    forest_states = run_simulation(forest, infection_prob, max_steps)
+    forest_states = run_simulation(forest, A, max_steps, p0, m)
     # log the forest states to stdout incase the movie fails.
     for step, forest in enumerate(forest_states):
         print(f"Step {step}:\n{forest}\n", end="", flush=True)
